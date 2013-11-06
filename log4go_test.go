@@ -9,6 +9,8 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+  "os/exec"
+  "path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -133,6 +135,73 @@ func TestFileLogWriter(t *testing.T) {
 
 	if contents, err := ioutil.ReadFile(testLogFile); err != nil {
 		t.Errorf("read(%q): %s", testLogFile, err)
+	} else if len(contents) != 50 {
+		t.Errorf("malformed filelog: %q (%d bytes)", string(contents), len(contents))
+	}
+}
+
+func TestDailyFileLogWriter(t *testing.T) {
+	defer func(buflen int) {
+		LogBufferLength = buflen
+	}(LogBufferLength)
+	LogBufferLength = 0
+
+	w := NewDailyFileLogWriter(testLogFile, 0)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	defer os.Remove(testLogFile)
+
+	w.LogWrite(newLogRecord(CRITICAL, "source", "message"))
+	w.Close()
+	runtime.Gosched()
+
+	if contents, err := ioutil.ReadFile(testLogFile); err != nil {
+		t.Errorf("read(%q): %s", testLogFile, err)
+	} else if len(contents) != 50 {
+		t.Errorf("malformed filelog: %q (%d bytes)", string(contents), len(contents))
+	}
+}
+
+func TestDailyFileLogWriter_Rotate(t *testing.T) {
+	defer func(buflen int) {
+		LogBufferLength = buflen
+	}(LogBufferLength)
+	LogBufferLength = 0
+
+	w := NewDailyFileLogWriter(testLogFile, 1)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil, ")
+	}
+	defer os.Remove(testLogFile)
+
+	w.LogWrite(newLogRecord(CRITICAL, "source", "message"))
+	runtime.Gosched()
+  
+  // Perform a rotation
+	w.intRotate()
+	w.Close()
+
+	fname := fmt.Sprintf("%s.%04d-%02d-%02d.gz", w.filename, w.filedate.Year(), w.filedate.Month(), w.filedate.Day())
+  defer os.Remove(fmt.Sprintf("%s.%04d-%02d-%02d", w.filename, w.filedate.Year(), w.filedate.Month(), w.filedate.Day()))
+  defer os.Remove(fmt.Sprintf("%s.%04d-%02d-%02d.gz", w.filename, w.filedate.Year(), w.filedate.Month(), w.filedate.Day()))
+
+	if _, err := os.Lstat(fname); os.IsNotExist(err) {
+		t.Errorf("File doesn't exist(%v): %v", fname, err)
+    return
+	}
+  
+  cmd := exec.Command("gunzip", "--force", fname)
+  cmd.Dir = filepath.Dir(fname)
+  if err := cmd.Run(); nil != err {
+		t.Errorf("gunzip(%q): %s", testLogFile, err)
+    return
+  }
+  
+  fname = fname[0:len(fname)-3]
+  if contents, err := ioutil.ReadFile(fname); err != nil {
+		t.Errorf("read(%q): %s", testLogFile, err)
+    return
 	} else if len(contents) != 50 {
 		t.Errorf("malformed filelog: %q (%d bytes)", string(contents), len(contents))
 	}
